@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_file_downloader/flutter_file_downloader.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 class MyHomePage extends StatefulWidget {
   @override
@@ -16,9 +19,15 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
   Duration _position = Duration.zero;
   double? _progress;
   final player = AudioPlayer();
-  String audioUrl =
-      'https://media.radioinstore.in/songs/Tamil/1987/rettai%20val%20kuruvi/raja%20raja%20cholan_kj%20jesudoss.mp3';
+ List <String> audioUrl = [
+  "https://media.radioinstore.in/songs/Tamil/2011/Yengeyum%20kadhal/thee%20Illai_Naresh%20Iyer%2C%20Mukesh%2C%20Gopal%20Rao%2C%20Mahathi%2C%20Ranina%20Reddy.mp3",
+  "https://media.radioinstore.in/songs/Tamil/1990/Keladi%20Kanmani/nee%20pathi%20nanpathi_jesu.mp3",
+  "https://media.radioinstore.in/songs/Tamil/1995/Sathi%20leelavathy/Maharajanodo_NA.mp3",
+  "https://media.radioinstore.in/songs/Tamil/1991/maanagara%20kaaval/thodi%20raagam_NA.mp3",
+  "https://media.radioinstore.in/songs/Tamil/1997/Periya%20thambi/Tajmahale%20nee.mp3"
+ ];
   String filename = "audio.mp3";
+  int currentAudioIndex=0;
 
   @override
   void initState() {
@@ -44,24 +53,97 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
       duration: Duration(milliseconds: 1000),
     );
 
-    playAudioFromURL(audioUrl);
+    playAudioFromURL(audioUrl[currentAudioIndex]);
     requestPermissions();
+    startBackgroundDownloading();
   }
-void playAudioFromURL(String audioUrl) async {
-    await player.setSourceUrl(audioUrl);
-    player.resume();
-  }
-  void requestPermissions() async {
-  Map<Permission, PermissionStatus> statuses = await [
-    Permission.storage,
-  ].request();
+ void startBackgroundDownloading() async {
+  List<Future<void>> downloads =[];
+  for (int i = 0; i < audioUrl.length; i++) {
+    String audioUrlToDownload = audioUrl[i].trim();
+    String filename = audioUrlToDownload.split('/').last;
+    String? localFilePath = await findLocalFilePath(audioUrlToDownload);
 
+    if (localFilePath == null) {
+      downloads.add(downloadAudioFiles(audioUrlToDownload));
+    }
+  }
+  await Future.wait(downloads);
+  playAudioFromURL(audioUrl[currentAudioIndex]);
+}
+Future<void> playAudioFromURL(String audioUrl) async {
+  String? localFilePath = await findLocalFilePath(audioUrl);
+  if (localFilePath != null) {
+ await player.setSourceDeviceFile(localFilePath);
+  } else {
+    await player.setSourceUrl(audioUrl);
+  }
+  player.resume();
+  player.onPlayerStateChanged.listen((PlayerState state) {
+    if (state == PlayerState.completed) {
+      playNextAudio();
+    }
+  });
+}
+Future<void> playAudioFromLocalFile(String localFilePath) async {
+  Directory appDocDir = await getApplicationDocumentsDirectory();
+  String fullPath = '${appDocDir.path}/$localFilePath';
+  await player.setSourceDeviceFile(fullPath);
+  player.resume();
 }
 
-  String formatTime(int seconds) {
-    return '${Duration(seconds: seconds)}'.split(".")[0].padLeft(8, '0');
+  Future<String?> findLocalFilePath(String audioUrl) async{
+    String filename =audioUrl.split('/').last;
+    String localFilePath = '$filename';
+    if(await File(localFilePath).exists()){
+      return localFilePath;
+    }
+    return null;
   }
+  Future<void> downloadAudioFiles(String audioUrl) async {
+      try {
+        setState(() {
+          _progress = 0.0;
+        });
+        String filename = audioUrl.split('/').last;
+        await FileDownloader.downloadFile(
+           url: audioUrl.trim(),
+          onProgress: (name, progress) {
+            setState(() {
+              _progress = progress;
+            });
+          },
+        );
+        print("Download completed: $filename");
 
+        setState(() {
+          _progress = null;
+        });
+      } catch (error) {
+        print("Download failed: $error");
+
+        setState(() {
+          _progress = null;
+        });
+      }
+  }
+  
+ void playNextAudio() async {
+  if (currentAudioIndex < audioUrl.length - 1) {
+    currentAudioIndex++;
+    String? localFilePath = await findLocalFilePath(audioUrl[currentAudioIndex]);
+    if (localFilePath != null) {
+      await playAudioFromLocalFile(localFilePath);
+    } else {
+      await playAudioFromURL(audioUrl[currentAudioIndex]);
+    }
+  } else {
+    String? localFilePath = await findLocalFilePath(audioUrl[currentAudioIndex]);
+    if (localFilePath != null) {
+      await playAudioFromLocalFile(localFilePath);
+    }
+  }
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -70,9 +152,7 @@ void playAudioFromURL(String audioUrl) async {
         title: Text("Audio player"),
         backgroundColor: Colors.lightGreen,
       ),
-      body:
-
-      SingleChildScrollView(
+      body: SingleChildScrollView(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -140,18 +220,23 @@ void playAudioFromURL(String audioUrl) async {
               ],
             ),
             Row(
-             
-              children:[
+               children:[
                  SizedBox(width: 60),
-                 
-            Text("Download click button"),
-           _progress != null ? CircularProgressIndicator() :
+                            Text("Download click button"),
+           _progress != null
+           ? CircularProgressIndicator() :
             IconButton(
               onPressed: ()  {
-            downloadAudioFile();
+            downloadAudioFiles(audioUrl[currentAudioIndex]);
               },
               icon: Icon(Icons.download),
             ),
+
+      IconButton(
+        onPressed: ()  {
+       },
+       icon: Icon(Icons.file_copy),
+          ),
               ]
             ),
           ],
@@ -159,45 +244,34 @@ void playAudioFromURL(String audioUrl) async {
       ),
     );
   }
-void downloadAudioFile() {
-  FileDownloader.downloadFile(
-    url: audioUrl.toString().trim(),
-    onProgress: (name, progress) {
-      setState(() {
-        _progress = progress;
-      });
-    },
-  ).then((value) {
-    
-    print("Download completed.");
-    setState(() {
-      _progress = null;
-    });
-  }).catchError((error) {
-    print("Download failed: $error");
-    setState(() {
-      _progress = null;
-    });
-  });
+  void requestPermissions() async {
+  Map<Permission, PermissionStatus> statuses = await [
+    Permission.storage,
+  ].request();
 }
+  String formatTime(int seconds) {
+    return '${Duration(seconds: seconds)}'.split(".")[0].padLeft(8, '0');
+  }
   void animateIcon() {
     setState(() {
       isAnimated = !isAnimated;
 
       if (isAnimated) {
         iconController.forward();
+        
         player.resume();
+        
       } else {
         iconController.reverse();
         player.pause();
       }
     });
   }
-
   @override
   void dispose() {
     iconController.dispose();
     player.dispose();
     super.dispose();
   }
+
 }
